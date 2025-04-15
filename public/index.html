@@ -1,0 +1,346 @@
+<!-- public/index.html -->
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mini WhatsApp</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        
+        #chat-container {
+            display: none;
+            margin-top: 20px;
+        }
+        
+        #messages {
+            height: 300px;
+            border: 1px solid #ccc;
+            overflow-y: auto;
+            padding: 10px;
+            margin-bottom: 10px;
+        }
+        
+        .message {
+            margin-bottom: 5px;
+            padding: 5px;
+            border-radius: 5px;
+        }
+        
+        .received {
+            background-color: #e3f2fd;
+            align-self: flex-start;
+        }
+        
+        .sent {
+            background-color: #e8f5e9;
+            text-align: right;
+        }
+        
+        .broadcast {
+            background-color: #fff9c4;
+        }
+        
+        .system {
+            background-color: #f5f5f5;
+            font-style: italic;
+        }
+        
+        #online-users {
+            border: 1px solid #ccc;
+            padding: 10px;
+            height: 300px;
+            overflow-y: auto;
+            width: 150px;
+            float: right;
+        }
+        
+        #message-form {
+            display: flex;
+            margin-top: 10px;
+        }
+        
+        #message-input {
+            flex-grow: 1;
+            padding: 8px;
+        }
+        
+        button {
+            padding: 8px 15px;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            cursor: pointer;
+        }
+        
+        .user-item {
+            cursor: pointer;
+            padding: 5px;
+        }
+        
+        .user-item:hover {
+            background-color: #f0f0f0;
+        }
+        
+        .user-item.selected {
+            background-color: #e0e0e0;
+            font-weight: bold;
+        }
+        
+        .main-container {
+            display: flex;
+        }
+        
+        .chat-area {
+            flex-grow: 1;
+            margin-right: 10px;
+        }
+    </style>
+</head>
+<body>
+    <h1>Mini WhatsApp</h1>
+    
+    <div id="login-container">
+        <h2>Login</h2>
+        <input type="text" id="username-input" placeholder="Seu nome de usuário">
+        <button id="login-button">Entrar</button>
+        <p id="login-status"></p>
+    </div>
+    
+    <div id="chat-container">
+        <div class="main-container">
+            <div class="chat-area">
+                <h2>Mensagens</h2>
+                <div>
+                    Enviando para: 
+                    <span id="current-recipient">Todos (Broadcast)</span>
+                    <button id="check-status-button">Verificar Status</button>
+                </div>
+                <div id="messages"></div>
+                <form id="message-form">
+                    <input type="text" id="message-input" placeholder="Digite sua mensagem">
+                    <button type="submit">Enviar</button>
+                </form>
+            </div>
+            
+            <div id="online-users">
+                <h3>Usuários Online</h3>
+                <div class="user-item selected" data-username="broadcast">Todos (Broadcast)</div>
+                <div id="users-list"></div>
+            </div>
+        </div>
+    </div>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script>
+        // Conecta ao servidor Socket.IO
+        const socket = io();
+        
+        // Elementos DOM
+        const loginContainer = document.getElementById('login-container');
+        const chatContainer = document.getElementById('chat-container');
+        const usernameInput = document.getElementById('username-input');
+        const loginButton = document.getElementById('login-button');
+        const loginStatus = document.getElementById('login-status');
+        const messagesDiv = document.getElementById('messages');
+        const messageForm = document.getElementById('message-form');
+        const messageInput = document.getElementById('message-input');
+        const usersList = document.getElementById('users-list');
+        const currentRecipient = document.getElementById('current-recipient');
+        const checkStatusButton = document.getElementById('check-status-button');
+        
+        // Estado da aplicação
+        let currentUsername = '';
+        let selectedRecipient = 'broadcast'; // Por padrão, mensagens vão para todos
+        
+        // Login
+        loginButton.addEventListener('click', () => {
+            const username = usernameInput.value.trim();
+            
+            if (username) {
+                loginStatus.textContent = 'Conectando...';
+                socket.emit('register', username);
+            } else {
+                loginStatus.textContent = 'Por favor, digite um nome de usuário.';
+            }
+        });
+        
+        // Resposta ao login
+        socket.on('register-response', (response) => {
+            if (response.success) {
+                currentUsername = usernameInput.value.trim();
+                loginStatus.textContent = response.message;
+                
+                // Muda para a interface de chat
+                loginContainer.style.display = 'none';
+                chatContainer.style.display = 'block';
+                
+                // Adiciona mensagem de boas-vindas
+                addMessage('Sistema', `Bem-vindo ao Mini WhatsApp! Você está conectado como ${currentUsername}.`, 'system');
+                
+                // Atualiza lista de usuários
+                socket.emit('get-online-users');
+            } else {
+                loginStatus.textContent = response.message;
+            }
+        });
+        
+        // Envio de mensagem
+        messageForm.addEventListener('submit', (e) => {
+            e.preventDefault();
+            const message = messageInput.value.trim();
+            
+            if (!message) return;
+            
+            if (selectedRecipient === 'broadcast') {
+                // Broadcast para todos
+                socket.emit('broadcast-message', { content: message });
+                addMessage(currentUsername, message, 'sent');
+            } else {
+                // Mensagem privada
+                socket.emit('private-message', { to: selectedRecipient, content: message });
+                addMessage(`Você para ${selectedRecipient}`, message, 'sent');
+            }
+            
+            messageInput.value = '';
+        });
+        
+        // Recebimento de mensagem privada
+        socket.on('private-message', (data) => {
+            addMessage(data.from, data.content, 'received');
+        });
+        
+        // Recebimento de broadcast
+        socket.on('broadcast-message', (data) => {
+            if (data.from !== currentUsername) {
+                addMessage(`${data.from} (para todos)`, data.content, 'broadcast');
+            }
+        });
+        
+        // Status de mensagem enviada
+        socket.on('message-status', (data) => {
+            addMessage('Sistema', data.message, 'system');
+        });
+        
+        // Novo usuário conectado
+        socket.on('user-connected', (data) => {
+            if (data.username !== currentUsername) {
+                addMessage('Sistema', `${data.username} conectou-se ao servidor ${data.serverId}.`, 'system');
+                addUserToList(data.username);
+            }
+        });
+        
+        // Usuário desconectado
+        socket.on('user-disconnected', (data) => {
+            addMessage('Sistema', `${data.username} desconectou-se.`, 'system');
+            removeUserFromList(data.username);
+        });
+        
+        // Lista de usuários online
+        socket.on('online-users', (users) => {
+            // Limpa a lista atual
+            usersList.innerHTML = '';
+            
+            // Adiciona cada usuário à lista
+            users.forEach(user => {
+                if (user.username !== currentUsername) {
+                    addUserToList(user.username);
+                }
+            });
+        });
+        
+        // Status de usuário
+        socket.on('user-status', (data) => {
+            if (data.online) {
+                addMessage('Sistema', `${data.username} está online no servidor ${data.server}.`, 'system');
+            } else {
+                addMessage('Sistema', `${data.username} não está online.`, 'system');
+            }
+        });
+        
+        // Erro
+        socket.on('error', (data) => {
+            addMessage('Erro', data.message, 'system');
+        });
+        
+        // Verificar status do usuário selecionado
+        checkStatusButton.addEventListener('click', () => {
+            if (selectedRecipient !== 'broadcast') {
+                socket.emit('check-user-status', selectedRecipient);
+            } else {
+                addMessage('Sistema', 'Não é possível verificar o status de "Todos".', 'system');
+            }
+        });
+        
+        // Função para adicionar mensagem ao chat
+        function addMessage(sender, content, type) {
+            const messageElement = document.createElement('div');
+            messageElement.classList.add('message', type);
+            messageElement.innerHTML = `<strong>${sender}:</strong> ${content}`;
+            messagesDiv.appendChild(messageElement);
+            messagesDiv.scrollTop = messagesDiv.scrollHeight;
+        }
+        
+        // Função para adicionar usuário à lista
+        function addUserToList(username) {
+            // Verifica se o usuário já está na lista
+            if (document.querySelector(`.user-item[data-username="${username}"]`)) {
+                return;
+            }
+            
+            const userElement = document.createElement('div');
+            userElement.classList.add('user-item');
+            userElement.setAttribute('data-username', username);
+            userElement.textContent = username;
+            
+            userElement.addEventListener('click', () => {
+                // Remove a seleção atual
+                document.querySelectorAll('.user-item.selected').forEach(el => {
+                    el.classList.remove('selected');
+                });
+                
+                // Seleciona o novo destinatário
+                userElement.classList.add('selected');
+                selectedRecipient = username;
+                currentRecipient.textContent = username;
+            });
+            
+            usersList.appendChild(userElement);
+        }
+        
+        // Função para remover usuário da lista
+        function removeUserFromList(username) {
+            const userElement = document.querySelector(`.user-item[data-username="${username}"]`);
+            
+            if (userElement) {
+                // Se o usuário removido era o destinatário selecionado, volta para o broadcast
+                if (selectedRecipient === username) {
+                    selectedRecipient = 'broadcast';
+                    currentRecipient.textContent = 'Todos (Broadcast)';
+                    document.querySelector('.user-item[data-username="broadcast"]').classList.add('selected');
+                }
+                
+                userElement.remove();
+            }
+        }
+        
+        // Adiciona evento de clique no item "Todos"
+        document.querySelector('.user-item[data-username="broadcast"]').addEventListener('click', () => {
+            // Remove a seleção atual
+            document.querySelectorAll('.user-item.selected').forEach(el => {
+                el.classList.remove('selected');
+            });
+            
+            // Seleciona broadcast
+            document.querySelector('.user-item[data-username="broadcast"]').classList.add('selected');
+            selectedRecipient = 'broadcast';
+            currentRecipient.textContent = 'Todos (Broadcast)';
+        });
+    </script>
+</body>
+</html>
